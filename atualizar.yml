@@ -1,0 +1,91 @@
+name: Atualizar portal
+
+on:
+  schedule:
+    - cron: "9 12 * * *"
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - index.html
+      - .github/workflows/atualizar.yml
+
+concurrency:
+  group: atualizar-portal
+  cancel-in-progress: false
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verificar TDN e novidades
+        id: check
+        run: |
+          python3 -I atualizar.py check | tee saida.txt
+          echo "status=$(tail -n 1 saida.txt | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Guardar dados novos
+        if: steps.check.outputs.status == 'PUBLICAR'
+        run: |
+          python3 -I atualizar.py commit
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data.json estado
+          git commit -m "Atualiza dados da TDN"
+          git push
+
+      - name: Manter agendamento ativo
+        if: steps.check.outputs.status == 'SEM_MUDANCA'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ultimo=$(git log -1 --format=%ct)
+          agora=$(date +%s)
+          if [ $((agora - ultimo)) -gt 2160000 ]; then
+            date -u +%Y-%m-%dT%H:%M:%SZ > estado/ultima-verificacao.txt
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add estado/ultima-verificacao.txt
+            git commit -m "Registro mensal de verificacao"
+            git push
+            gh api -X PUT "repos/${{ github.repository }}/actions/workflows/atualizar.yml/enable" || true
+          else
+            echo "Ultimo commit ha menos de 25 dias; nada a registrar."
+          fi
+
+  publicar-site:
+    needs: atualizar
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Preparar site
+        run: |
+          mkdir -p site
+          cp index.html data.json site/
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
