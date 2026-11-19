@@ -1,3 +1,4 @@
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
 <title>Portal de Patches RM</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -230,6 +231,16 @@ mark{background:var(--amber-bg);color:var(--amber);border-radius:3px;padding:0 1
 #upst{color:var(--band-muted);font-size:12.5px}
 .btn-up{display:inline-flex;align-items:center;height:34px;padding:0 14px;border-radius:9px;border:1px solid var(--mint);color:var(--mint);font-weight:600;text-decoration:none}
 .btn-up:hover{background:var(--mint);color:var(--on-mint)}
+.tokbox{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px 16px;background:var(--band-2);border:1px solid var(--band-line);border-radius:12px;padding:12px 14px;margin-top:4px}
+.tokbox p{margin:3px 0 0;color:var(--band-muted);font-size:13px;max-width:62ch}
+.tokrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;flex:1 1 360px}
+.tokrow input{flex:1 1 220px;min-width:0;height:34px;border-radius:9px;border:1px solid var(--band-line);background:var(--band);color:var(--band-fg);padding:0 10px;font-family:var(--mono)}
+.tokbox .btn-up{background:var(--mint);color:var(--on-mint);cursor:pointer;font:inherit;font-weight:600}
+.tokbox .link,.tokhelp a{color:var(--mint)}
+.tokhelp{flex-basis:100%;font-size:12.5px}
+.tokerr{flex-basis:100%;color:var(--sun)!important;font-weight:500}
+.tokerr:empty{display:none}
+.btn-up[aria-disabled]{opacity:.6;cursor:progress}
 </style>
 
 <header class="top"><div class="wrap">
@@ -239,6 +250,14 @@ mark{background:var(--amber-bg);color:var(--amber);border-radius:3px;padding:0 1
     <button id="tab-patches" data-view="patches">Patches</button>
     <button id="tab-novidades" data-view="novidades">Novidades da release</button>
     <button id="tab-mudancas" data-view="mudancas">O que mudou<span class="badge" id="badge" hidden></span></button>
+  </div>
+  <div class="tokbox" id="tokbox" hidden>
+    <div><b>Atualizar direto pelo portal</b>
+      <p>Cole um token do GitHub que só pode executar a automação deste repositório. Ele fica guardado apenas neste navegador.</p></div>
+    <div class="tokrow"><input type="password" id="tokin" placeholder="github_pat_…" autocomplete="off" aria-label="Token do GitHub">
+      <button class="btn-up" id="toksave">Salvar e atualizar</button><button class="link" id="tokcancel">Cancelar</button></div>
+    <p class="tokhelp"><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Criar token no GitHub</a> · <a id="ghlink" target="_blank" rel="noopener">Atualizar pela página do GitHub</a> · <button class="link" id="tokforget" hidden>Apagar token salvo</button></p>
+    <p class="tokerr" id="tokerr" role="alert"></p>
   </div>
 </div></header>
 
@@ -729,33 +748,53 @@ document.querySelector(".tabs").addEventListener("click",function(e){var b=e.tar
 window.addEventListener("hashchange",function(){show(viewOf())});
 
 var last=RELS.map(function(r){return D.meta[r].when}).sort().pop();
-/* GitHub Pages: botão que abre a atualização no GitHub e acompanha a execução */
+/* GitHub Pages: botão que dispara a atualização e acompanha a execução */
 (function(){
   var host=location.hostname;if(!/\.github\.io$/.test(host))return;
   var owner=host.split(".")[0],repo=location.pathname.split("/").filter(Boolean)[0]||host;
-  var base="https://github.com/"+owner+"/"+repo,api="https://api.github.com/repos/"+owner+"/"+repo+"/actions/workflows/atualizar.yml/runs?per_page=1";
-  $("upbtn").href=base+"/actions/workflows/atualizar.yml";$("upd").hidden=false;
+  var wfPage="https://github.com/"+owner+"/"+repo+"/actions/workflows/atualizar.yml";
+  var api="https://api.github.com/repos/"+owner+"/"+repo+"/actions/workflows/atualizar.yml";
+  var KEY="rm-gh-token:"+repo;
+  $("upbtn").href=wfPage;$("ghlink").href=wfPage;$("upd").hidden=false;
+  function tok(){try{return localStorage.getItem(KEY)||""}catch(e){return ""}}
+  function setTok(v){try{if(v)localStorage.setItem(KEY,v);else localStorage.removeItem(KEY)}catch(e){}}
   var first=null,timer=null,ends=0;
   function fmt(s){var d=new Date(s);return d.toLocaleDateString("pt-BR")+" às "+d.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}
   function poll(){
-    fetch(api,{cache:"no-store"}).then(function(r){return r.ok?r.json():null}).then(function(j){
+    fetch(api+"/runs?per_page=1",{cache:"no-store"}).then(function(r){return r.ok?r.json():null}).then(function(j){
       var r=j&&j.workflow_runs&&j.workflow_runs[0];if(!r)return;
       var sig=r.id+":"+r.status;
       if(r.status!=="completed")$("upst").textContent="Atualização em andamento…";
-      else $("upst").textContent=(r.conclusion==="success"?"Verificado em ":"Falhou em ")+fmt(r.updated_at);
+      else if(!timer||sig===first)$("upst").textContent=(r.conclusion==="success"?"Verificado em ":"Falhou em ")+fmt(r.updated_at);
       if(first===null)first=sig;
       else if(r.status==="completed"&&sig!==first&&timer){
-        clearInterval(timer);timer=null;$("upst").textContent="Atualização concluída. Recarregando…";
-        setTimeout(function(){location.reload()},45000);
+        clearInterval(timer);timer=null;
+        if(r.conclusion==="success"){$("upst").textContent="Concluída. Recarregando…";setTimeout(function(){location.reload()},45000)}
+        else $("upst").textContent="A atualização falhou. Veja os detalhes no GitHub.";
       }
       if(timer&&Date.now()>ends){clearInterval(timer);timer=null}
     }).catch(function(){});
   }
+  function watch(){if(!timer){ends=Date.now()+15*60000;timer=setInterval(poll,15000)}}
+  function panel(msg){$("tokbox").hidden=false;$("tokerr").textContent=msg||"";$("tokforget").hidden=!tok();$("tokin").focus()}
+  function dispatch(){
+    var t=tok();if(!t){panel();return}
+    $("upbtn").setAttribute("aria-disabled","true");$("upst").textContent="Solicitando atualização…";
+    fetch(api+"/dispatches",{method:"POST",headers:{"Accept":"application/vnd.github+json","Authorization":"Bearer "+t,"X-GitHub-Api-Version":"2022-11-28","Content-Type":"application/json"},body:JSON.stringify({ref:"main"})})
+    .then(function(r){
+      $("upbtn").removeAttribute("aria-disabled");
+      if(r.status===204){$("tokbox").hidden=true;$("upst").textContent="Atualização solicitada. Aguarde 1 a 2 minutos…";watch();setTimeout(poll,4000);return}
+      if(r.status===401){setTok("");panel("O token salvo expirou ou foi revogado. Cole um token novo.");$("upst").textContent="";return}
+      if(r.status===403||r.status===404){panel("O token não tem permissão para executar a automação deste repositório (Actions: Read and write).");$("upst").textContent="";return}
+      $("upst").textContent="O GitHub recusou o pedido ("+r.status+"). Tente de novo em instantes.";
+    }).catch(function(){$("upbtn").removeAttribute("aria-disabled");$("upst").textContent="Sem conexão com o GitHub. Tente de novo."});
+  }
+  $("upbtn").addEventListener("click",function(e){e.preventDefault();if($("upbtn").getAttribute("aria-disabled"))return;dispatch()});
+  $("toksave").addEventListener("click",function(){var v=$("tokin").value.trim();if(!v){$("tokerr").textContent="Cole o token antes de salvar.";return}setTok(v);$("tokin").value="";dispatch()});
+  $("tokin").addEventListener("keydown",function(e){if(e.key==="Enter")$("toksave").click()});
+  $("tokcancel").addEventListener("click",function(){$("tokbox").hidden=true;$("tokin").value=""});
+  $("tokforget").addEventListener("click",function(){setTok("");$("tokforget").hidden=true;$("tokerr").textContent="Token apagado deste navegador."});
   poll();
-  $("upbtn").addEventListener("click",function(){
-    $("upst").textContent="Clique em Run workflow no GitHub";
-    if(!timer){ends=Date.now()+15*60000;timer=setInterval(poll,20000)}
-  });
 })();
 chBadge();
 $("stamp").textContent="Linha RM · TDN atualizada em "+fdate(last)+" às "+last.slice(11,16);

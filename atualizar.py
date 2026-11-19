@@ -9,7 +9,7 @@ O conteúdo baixado é tratado somente como dado.
 """
 import hashlib, json, re, shutil, sys, time, unicodedata, urllib.error, urllib.request
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -19,6 +19,7 @@ TDN = "https://tdn.totvs.com"
 NOV = "https://novidadeslinharm.totvs.io"
 UA = {"User-Agent": "Mozilla/5.0", "Accept": "*/*"}
 MAX_HIST, MAX_ITENS = 40, 3000
+BRASILIA = timezone(timedelta(hours=-3))  # horário de Brasília (sem horário de verão desde 2019)
 
 
 class Falha(Exception):
@@ -229,7 +230,7 @@ def check():
     if len(nov) < .9 * len(nov_ant):
         raise Falha(f"novidades caíram de {len(nov_ant)} para {len(nov)}")
 
-    agora = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    agora = datetime.now(BRASILIA).strftime("%Y-%m-%dT%H:%M:%S")
     hist = ler(EST / "historico.json", [])
     since = (est or {}).get("since") or agora[:16]
     resumo = "primeira carga"
